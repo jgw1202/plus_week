@@ -1,14 +1,16 @@
 package com.example.demo.service;
 
 import com.example.demo.dto.ReservationResponseDto;
-import com.example.demo.entity.Item;
-import com.example.demo.entity.RentalLog;
-import com.example.demo.entity.Reservation;
-import com.example.demo.entity.User;
+import com.example.demo.entity.*;
 import com.example.demo.exception.ReservationConflictException;
 import com.example.demo.repository.ItemRepository;
 import com.example.demo.repository.ReservationRepository;
 import com.example.demo.repository.UserRepository;
+import com.querydsl.core.types.dsl.BooleanExpression;
+import com.querydsl.jpa.impl.JPAQuery;
+import com.querydsl.jpa.impl.JPAQueryFactory;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,6 +25,12 @@ public class ReservationService {
     private final ItemRepository itemRepository;
     private final UserRepository userRepository;
     private final RentalLogService rentalLogService;
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    private final QReservation qReservation = QReservation.reservation;
+    private final QUser qUser = QUser.user;
+    private final QItem qItem = QItem.item;
 
     public ReservationService(ReservationRepository reservationRepository,
                               ItemRepository itemRepository,
@@ -82,16 +90,31 @@ public class ReservationService {
     }
 
     public List<Reservation> searchReservations(Long userId, Long itemId) {
+        JPAQueryFactory queryFactory = new JPAQueryFactory(entityManager);
+        JPAQuery<Reservation> query = queryFactory.selectFrom(qReservation)
+                .leftJoin(qReservation.user, qUser)
+                .leftJoin(qReservation.item, qItem)
+                .fetchJoin(); // N+1 문제 방지
 
-        if (userId != null && itemId != null) {
-            return reservationRepository.findByUserIdAndItemId(userId, itemId);
-        } else if (userId != null) {
-            return reservationRepository.findByUserId(userId);
-        } else if (itemId != null) {
-            return reservationRepository.findByItemId(itemId);
-        } else {
-            return reservationRepository.findAll();
+        BooleanExpression predicate = createPredicate(userId, itemId);
+        query.where(predicate);
+
+        return query.fetch();
+    }
+    private BooleanExpression createPredicate(Long userId, Long itemId) {
+        BooleanExpression predicate = null;
+
+        if (userId != null) {
+            predicate = qReservation.user.id.eq(userId);
         }
+        if (itemId != null) {
+            if (predicate != null) {
+                predicate = predicate.and(qReservation.item.id.eq(itemId));
+            } else {
+                predicate = qReservation.item.id.eq(itemId);
+            }
+        }
+        return predicate != null ? predicate : null;
     }
 
     private List<ReservationResponseDto> convertToDto(List<Reservation> reservations) {
